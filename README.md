@@ -1,6 +1,6 @@
-# streamcoreai-sdk (Python)
+# streamcore (Python)
 
-Python SDK for connecting to a [StreamCoreAI](https://github.com/streamcoreai/streamcoreai) server via WebRTC + WHIP, powered by [aiortc](https://github.com/aiortc/aiortc).
+Python SDK for connecting to a [streamcore](https://github.com/streamcore/streamcore-server) server via WebRTC + WHIP, powered by [aiortc](https://github.com/aiortc/aiortc).
 
 ## Requirements
 
@@ -9,7 +9,7 @@ Python SDK for connecting to a [StreamCoreAI](https://github.com/streamcoreai/st
 ## Installation
 
 ```bash
-pip install streamcoreai-sdk
+pip install streamcore
 ```
 
 Or install from source:
@@ -24,16 +24,16 @@ pip install -e .
 ```python
 import asyncio
 import numpy as np
-import streamcoreai
+import streamcore
 
 
 async def main():
     def on_transcript(entry, all_entries):
         print(f"[{entry.role}] {entry.text}")
 
-    client = streamcoreai.Client(
-        config=streamcoreai.Config(whip_endpoint="http://localhost:8080/whip"),
-        events=streamcoreai.EventHandler(
+    client = streamcore.Client(
+        config=streamcore.Config(whip_endpoint="http://localhost:8080/whip"),
+        events=streamcore.EventHandler(
             on_transcript=on_transcript,
             on_error=lambda err: print(f"Error: {err}"),
         ),
@@ -42,7 +42,7 @@ async def main():
     await client.connect()
 
     # Send a 20 ms frame of silence
-    pcm = np.zeros(streamcoreai.FRAME_SIZE, dtype=np.int16)
+    pcm = np.zeros(streamcore.FRAME_SIZE, dtype=np.int16)
     await client.send_pcm(pcm)
 
     # Receive decoded audio from the agent
