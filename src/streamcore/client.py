@@ -25,7 +25,7 @@ from .types import (
 )
 from .whip import whip_delete, whip_offer
 
-logger = logging.getLogger("streamcoreai")
+logger = logging.getLogger("streamcore")
 
 
 class Client:
