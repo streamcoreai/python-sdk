@@ -5,6 +5,7 @@ import json
 import logging
 from threading import Lock
 
+import aiohttp
 import av
 import numpy as np
 from aiortc import (
@@ -17,6 +18,7 @@ from aiortc.contrib.media import MediaBlackhole
 
 from .audio import SAMPLE_RATE, _SDKAudioTrack
 from .types import (
+    AgentState,
     Config,
     ConnectionStatus,
     DataChannelMessage,
@@ -104,6 +106,7 @@ class Client:
                         text=data.get("text", ""),
                         final=data.get("final", False),
                         message=data.get("message", ""),
+                        state=data.get("state", ""),
                     )
                     if self.events.on_data_channel_message:
                         self.events.on_data_channel_message(msg)
@@ -132,8 +135,21 @@ class Client:
             # so localDescription.sdp already contains all candidates.
             offer_sdp = pc.localDescription.sdp
 
+            # Fetch a fresh token from the token endpoint if configured.
+            token = self.config.token
+            if self.config.token_url:
+                fetch_headers: dict[str, str] = {}
+                if self.config.api_key:
+                    fetch_headers["Authorization"] = f"Bearer {self.config.api_key}"
+                async with aiohttp.ClientSession() as http_session:
+                    async with http_session.post(self.config.token_url, headers=fetch_headers) as resp:
+                        if resp.status != 200:
+                            raise RuntimeError(f"Token request failed ({resp.status})")
+                        data = await resp.json()
+                        token = data["token"]
+
             # WHIP exchange.
-            result = await whip_offer(self.config.whip_endpoint, offer_sdp)
+            result = await whip_offer(self.config.whip_endpoint, offer_sdp, token)
             self._session_url = result.session_url
 
             answer = RTCSessionDescription(sdp=result.answer_sdp, type="answer")
@@ -152,7 +168,7 @@ class Client:
         if self._sdk_track is not None:
             self._sdk_track.stop()
             self._sdk_track = None
-        await whip_delete(self._session_url)
+        await whip_delete(self._session_url, self.config.token)
         self._session_url = ""
         if self._blackhole:
             await self._blackhole.stop()
@@ -269,6 +285,14 @@ class Client:
                 logger.error("Server error: %s", msg.message)
                 if self.events.on_error:
                     self.events.on_error(RuntimeError(msg.message))
+                return
+
+            elif msg.type == "state":
+                if self.events.on_agent_state_change and msg.state:
+                    try:
+                        self.events.on_agent_state_change(AgentState(msg.state))
+                    except ValueError:
+                        logger.warning("Unknown agent state: %s", msg.state)
                 return
             else:
                 return

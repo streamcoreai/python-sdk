@@ -1,5 +1,6 @@
 from .audio import CHANNELS, FRAME_SIZE, SAMPLE_RATE
 from .types import (
+    AgentState,
     ConnectionStatus,
     TranscriptEntry,
     DataChannelMessage,
@@ -13,6 +14,7 @@ __all__ = [
     "Client",
     "Config",
     "EventHandler",
+    "AgentState",
     "ConnectionStatus",
     "TranscriptEntry",
     "DataChannelMessage",
