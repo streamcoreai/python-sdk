@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "streamcore"
-version = "0.1.0"
+version = "0.1.1"
 description = "Python SDK for connecting to a Pion Voice Agent server via WebRTC + WHIP"
 readme = "README.md"
 license = "Apache-2.0"

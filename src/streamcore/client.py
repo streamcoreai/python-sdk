@@ -49,6 +49,12 @@ class Client:
 
         self._pc: RTCPeerConnection | None = None
         self._session_url: str = ""
+        # Most recently used JWT (either the static ``config.token`` or one
+        # fetched from ``config.token_url`` during ``connect``). ``disconnect``
+        # reuses this so the WHIP DELETE is properly authenticated; otherwise
+        # servers enforcing Bearer auth on ``/whip`` reject the teardown and
+        # skip server-side finalization (billing, transcript persistence, etc.).
+        self._last_token: str = ""
         self._blackhole: MediaBlackhole | None = None
 
         self._lock = Lock()
@@ -151,6 +157,9 @@ class Client:
                         data = await resp.json()
                         token = data["token"]
 
+            # Cache the token so ``disconnect`` can authenticate the WHIP DELETE.
+            self._last_token = token or ""
+
             # WHIP exchange.
             result = await whip_offer(self.config.whip_endpoint, offer_sdp, token)
             self._session_url = result.session_url
@@ -171,8 +180,27 @@ class Client:
         if self._sdk_track is not None:
             self._sdk_track.stop()
             self._sdk_track = None
-        await whip_delete(self._session_url, self.config.token)
+
+        # Resolve the token used for the WHIP DELETE. Prefer the cached token
+        # captured during ``connect`` (which may have come from ``token_url``),
+        # fall back to the static ``config.token``, and as a last resort
+        # re-fetch from ``token_url`` so teardown still authenticates.
+        token = self._last_token or self.config.token
+        if not token and self.config.token_url:
+            try:
+                fetch_headers: dict[str, str] = {}
+                if self.config.api_key:
+                    fetch_headers["Authorization"] = f"Bearer {self.config.api_key}"
+                async with aiohttp.ClientSession() as http_session:
+                    async with http_session.post(self.config.token_url, headers=fetch_headers) as resp:
+                        if resp.status == 200:
+                            data = await resp.json()
+                            token = data.get("token", "")
+            except Exception:  # best-effort
+                pass
+        await whip_delete(self._session_url, token)
         self._session_url = ""
+        self._last_token = ""
         if self._blackhole:
             await self._blackhole.stop()
             self._blackhole = None
