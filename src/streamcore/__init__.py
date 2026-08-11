@@ -7,6 +7,8 @@ from .types import (
     DataChannelMessage,
     Config,
     EventHandler,
+    ReconnectEvent,
+    ReconnectOutcome,
 )
 from .client import Client
 from .icerestart import (
@@ -26,6 +28,8 @@ __all__ = [
     "TranscriptEntry",
     "TimingEvent",
     "DataChannelMessage",
+    "ReconnectEvent",
+    "ReconnectOutcome",
     "whip_offer",
     "whip_delete",
     "whip_restart_ice",

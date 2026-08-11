@@ -9,8 +9,31 @@ class ConnectionStatus(str, Enum):
     IDLE = "idle"
     CONNECTING = "connecting"
     CONNECTED = "connected"
+    #: The transport is gone and the client is redialling with a resume token.
+    #: The conversation is still alive on the server, so this is not terminal.
+    RECONNECTING = "reconnecting"
     ERROR = "error"
     DISCONNECTED = "disconnected"
+
+
+class ReconnectOutcome(str, Enum):
+    ATTEMPTING = "attempting"
+    #: Reattached to the same server-side conversation.
+    RECOVERED = "recovered"
+    #: Reconnected, but the server could not resume — this is a fresh
+    #: conversation and the agent has no memory of what came before.
+    RECOVERED_WITHOUT_HISTORY = "recovered_without_history"
+    FAILED = "failed"
+
+
+@dataclass
+class ReconnectEvent:
+    """Progress of the redial sequence after a dropped connection."""
+
+    attempt: int  # 1-based
+    max_attempts: int
+    outcome: ReconnectOutcome
+    error: Exception | None = None
 
 
 @dataclass
@@ -55,6 +78,18 @@ class Config:
         default_factory=lambda: ["stun:stun.l.google.com:19302"]
     )
 
+    #: How many times to redial after a dropped connection. aiortc cannot
+    #: perform an ICE restart, so recovery here means a fresh peer connection
+    #: carrying the session's resume token — which keeps the *conversation*
+    #: even though the transport is new. 0 disables automatic reconnection.
+    reconnect_attempts: int = 3
+
+    #: Delay before the first redial, doubling for each retry. Unlike the ICE
+    #: restart path in the other SDKs there is no ~25s deadline to fit inside:
+    #: the server holds the conversation for ``server.session_grace_ms``
+    #: (30s by default), so keep the total under that.
+    reconnect_delay: float = 2.0
+
 
 @dataclass
 class EventHandler:
@@ -68,3 +103,7 @@ class EventHandler:
     on_timing: Callable[[TimingEvent], None] | None = None
     on_agent_state_change: Callable[[AgentState], None] | None = None
     on_data_channel_message: Callable[[DataChannelMessage], None] | None = None
+    #: Called for each redial attempt and once when the outcome is known.
+    #: Watch for RECOVERED_WITHOUT_HISTORY — the call works, but the agent has
+    #: forgotten the conversation and your UI may want to say so.
+    on_reconnect: Callable[[ReconnectEvent], None] | None = None

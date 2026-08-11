@@ -23,6 +23,8 @@ from .types import (
     ConnectionStatus,
     DataChannelMessage,
     EventHandler,
+    ReconnectEvent,
+    ReconnectOutcome,
     TimingEvent,
     TranscriptEntry,
 )
@@ -59,6 +61,14 @@ class Client:
         #: for callers driving an ICE restart themselves — see
         #: :mod:`streamcore.icerestart` for why the SDK cannot.
         self._etag: str = ""
+        #: Credential that reattaches a redial to this conversation. Rotated by
+        #: the server on every response, so it is single-use.
+        self._resume_token: str = ""
+        self._resume_status: str = ""
+        #: Bumped by connect/disconnect so a redial scheduled by a dying peer
+        #: connection abandons itself rather than fighting the new one.
+        self._generation: int = 0
+        self._user_track = None
         self._blackhole: MediaBlackhole | None = None
 
         self._lock = Lock()
@@ -91,7 +101,26 @@ class Client:
                 microphone audio. If provided it will be added to the peer
                 connection so the server receives audio from the user.
         """
-        self._set_status(ConnectionStatus.CONNECTING)
+        # Remembered so a redial can rebuild the transport with the same audio
+        # source. A fresh connect abandons any conversation being resumed.
+        self._user_track = user_track
+        self._resume_token = ""
+        self._generation += 1
+        await self._establish(resume_token="")
+
+    async def _establish(self, resume_token: str) -> None:
+        """Build a peer connection and complete WHIP signaling.
+
+        With a resume token the server reattaches this new transport to the
+        conversation the previous one was having, so the history, the rolling
+        summary and the agent's memory of the call all survive — see
+        :mod:`streamcore.icerestart` for why Python recovers this way rather
+        than with an ICE restart.
+        """
+        self._set_status(
+            ConnectionStatus.RECONNECTING if resume_token else ConnectionStatus.CONNECTING
+        )
+        user_track = self._user_track
 
         try:
             ice_servers = [RTCIceServer(urls=url) for url in self.config.ice_servers]
@@ -132,6 +161,8 @@ class Client:
                 self.remote_track = track
                 self._remote_track_ready.set()
 
+            generation = self._generation
+
             @pc.on("connectionstatechange")
             async def on_connection_state_change():
                 state = pc.connectionState
@@ -139,11 +170,15 @@ class Client:
                     self._set_status(ConnectionStatus.CONNECTED)
                 elif state in ("failed", "closed"):
                     # aiortc has no "disconnected" state — it goes straight
-                    # from connected to failed — so unlike the other SDKs
-                    # there is no transient window to attempt an ICE restart
-                    # in. See streamcore.icerestart for why, and prefer one of
-                    # the other SDKs where mid-call network changes matter.
-                    self._set_status(ConnectionStatus.DISCONNECTED)
+                    # from connected to failed — so there is no transient
+                    # window to attempt an ICE restart in, and no ICE restart
+                    # primitive to use if there were. Recovery is therefore a
+                    # full redial carrying the resume token, which rebuilds the
+                    # transport but keeps the conversation.
+                    if state == "failed" and generation == self._generation:
+                        asyncio.ensure_future(self._reconnect(generation))
+                    else:
+                        self._set_status(ConnectionStatus.DISCONNECTED)
 
             # Create offer and gather ICE candidates.
             offer = await pc.createOffer()
@@ -170,9 +205,13 @@ class Client:
             self._last_token = token or ""
 
             # WHIP exchange.
-            result = await whip_offer(self.config.whip_endpoint, offer_sdp, token)
+            result = await whip_offer(
+                self.config.whip_endpoint, offer_sdp, token, resume_token
+            )
             self._session_url = result.session_url
             self._etag = result.etag
+            self._resume_token = result.resume_token
+            self._resume_status = result.resume_status
 
             answer = RTCSessionDescription(sdp=result.answer_sdp, type="answer")
             await pc.setRemoteDescription(answer)
@@ -184,8 +223,109 @@ class Client:
                 self.events.on_error(exc)
             raise
 
+    async def _reconnect(self, generation: int) -> None:
+        """Redial after a dropped connection, keeping the conversation.
+
+        aiortc cannot restart ICE, so the transport is rebuilt from scratch.
+        What makes this a reconnection rather than a new call is the resume
+        token: the server reattaches the fresh peer to the session it was
+        already running, history intact and no repeated greeting.
+
+        The window is the server's ``session_grace_ms`` (30s by default) —
+        after that the session is reaped and a redial genuinely does start
+        over, which is reported as RECOVERED_WITHOUT_HISTORY rather than
+        passed off as a full recovery.
+        """
+        attempts = self.config.reconnect_attempts
+        if attempts <= 0 or generation != self._generation:
+            self._set_status(ConnectionStatus.DISCONNECTED)
+            return
+
+        token = self._resume_token
+        delay = self.config.reconnect_delay
+        self._set_status(ConnectionStatus.RECONNECTING)
+
+        # The dead peer connection holds the microphone track and a socket;
+        # drop it before building its replacement.
+        await self._teardown_peer()
+
+        for attempt in range(1, attempts + 1):
+            await asyncio.sleep(delay)
+            delay *= 2
+
+            if generation != self._generation:
+                return  # connect() or disconnect() superseded this redial
+
+            self._emit_reconnect(attempt, attempts, ReconnectOutcome.ATTEMPTING)
+            try:
+                await self._establish(resume_token=token)
+            except Exception as exc:
+                if attempt == attempts:
+                    self._set_status(ConnectionStatus.DISCONNECTED)
+                    self._emit_reconnect(
+                        attempt, attempts, ReconnectOutcome.FAILED, exc
+                    )
+                    return
+                logger.warning("Reconnect attempt %d failed: %s", attempt, exc)
+                await self._teardown_peer()
+                continue
+
+            resumed = self._resume_status == "resumed"
+            self._emit_reconnect(
+                attempt,
+                attempts,
+                ReconnectOutcome.RECOVERED
+                if resumed
+                else ReconnectOutcome.RECOVERED_WITHOUT_HISTORY,
+            )
+            if not resumed:
+                logger.warning(
+                    "Reconnected, but the server could not resume the session "
+                    "(status=%r) — the agent has no memory of the earlier "
+                    "conversation",
+                    self._resume_status,
+                )
+            return
+
+    def _emit_reconnect(
+        self,
+        attempt: int,
+        max_attempts: int,
+        outcome: ReconnectOutcome,
+        error: Exception | None = None,
+    ) -> None:
+        if self.events.on_reconnect:
+            self.events.on_reconnect(
+                ReconnectEvent(
+                    attempt=attempt,
+                    max_attempts=max_attempts,
+                    outcome=outcome,
+                    error=error,
+                )
+            )
+
+    async def _teardown_peer(self) -> None:
+        """Close the peer connection and its audio track, leaving the
+        session URL and resume token intact so a redial can still use them."""
+        if self._sdk_track is not None:
+            self._sdk_track.stop()
+            self._sdk_track = None
+        if self._pc is not None:
+            pc, self._pc = self._pc, None
+            try:
+                await asyncio.wait_for(pc.close(), timeout=3)
+            except Exception:
+                pass
+        self._remote_track_ready.clear()
+        self._resampler = None
+
     async def disconnect(self) -> None:
         """Tear down the WebRTC connection and free resources."""
+        # Abandons any redial in flight: it would otherwise resume a session
+        # this call is about to DELETE.
+        self._generation += 1
+        self._resume_token = ""
+
         # Stop SDK track first so aiortc's internal consumer unblocks.
         if self._sdk_track is not None:
             self._sdk_track.stop()
@@ -236,6 +376,11 @@ class Client:
                  Typically ``FRAME_SIZE`` (960) samples for a 20 ms frame.
         """
         if self._sdk_track is None:
+            if self._status == ConnectionStatus.RECONNECTING:
+                # Mid-redial the track is being rebuilt. Audio recorded now has
+                # nowhere to go and would be stale by the time it did, so drop
+                # it rather than fail a caller who is doing nothing wrong.
+                return
             raise RuntimeError(
                 "send_pcm requires the built-in audio track; "
                 "do not pass user_track to connect()"

@@ -14,6 +14,12 @@ class WhipResult:
     session_url: str
     #: ETag identifying the ICE session (RFC 9725 §4.3.1); required to PATCH it.
     etag: str = ""
+    #: Single-use credential for reattaching a later redial to this
+    #: conversation. Empty when the server cannot resume (realtime sessions).
+    resume_token: str = ""
+    #: "new", "resumed", or "expired". Anything but "resumed" on a redial means
+    #: the agent has no memory of the earlier conversation.
+    resume_status: str = ""
 
 
 @dataclass
@@ -45,20 +51,34 @@ class WhipRestartError(RuntimeError):
         return self.status not in (404, 409, 405)
 
 
-async def whip_offer(endpoint: str, offer_sdp: str, token: str = "") -> WhipResult:
+async def whip_offer(
+    endpoint: str,
+    offer_sdp: str,
+    token: str = "",
+    resume_token: str = "",
+) -> WhipResult:
     """Perform a WHIP signaling exchange per RFC 9725 §4.2.
 
     POST an SDP offer, receive a 201 Created with SDP answer and Location header.
+
+    ``resume_token`` is a StreamCore extension: it asks the server to reattach
+    this new transport to the conversation a previous connection was having,
+    rather than starting a fresh one. Check ``resume_status`` on the result —
+    a token the server no longer recognises still yields a working call, but
+    one whose agent remembers nothing.
     """
     headers: dict[str, str] = {"Content-Type": "application/sdp"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
+
+    params = {"resume": resume_token} if resume_token else None
 
     async with aiohttp.ClientSession() as session:
         async with session.post(
             endpoint,
             data=offer_sdp,
             headers=headers,
+            params=params,
         ) as resp:
             if resp.status != 201:
                 body = await resp.text()
@@ -78,6 +98,8 @@ async def whip_offer(endpoint: str, offer_sdp: str, token: str = "") -> WhipResu
                 answer_sdp=answer_sdp,
                 session_url=session_url,
                 etag=resp.headers.get("ETag", ""),
+                resume_token=resp.headers.get("X-Resume-Token", ""),
+                resume_status=resp.headers.get("X-Resume-Status", ""),
             )
 
 

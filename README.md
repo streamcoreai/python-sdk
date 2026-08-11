@@ -107,37 +107,64 @@ All callbacks are optional.
 
 ## Reconnection
 
-**The Python SDK does not reconnect automatically.** A network change mid-call
-ends the session, and recovery means calling `connect()` again — which starts a
-new conversation, without the previous history.
+A network change mid-call is recovered automatically, and the conversation
+survives it: the agent still knows who you are and does not replay its
+greeting.
 
-This is an aiortc limitation, not a protocol one. The server supports ICE
-restart (`PATCH /whip/{sessionId}`, RFC 9725 §4.4), and the TypeScript, React
-Native, Go, and Rust SDKs use it to recover a dropped connection on the *same*
-session, conversation intact. aiortc cannot: `RTCPeerConnection.createOffer()`
-takes no options, aioice fixes its ICE credentials at construction, and aiortc
-has no `disconnected` connection state to trigger on — it goes straight from
-`connected` to `failed`. Performing a restart would mean rebuilding the ICE
-layer under a live DTLS session.
+The mechanism differs from the other SDKs. They keep the transport alive with
+an ICE restart; aiortc cannot do that (`RTCPeerConnection.createOffer()` takes
+no options, aioice fixes its ICE credentials at construction, and aiortc has no
+`disconnected` state to act on — it goes straight from `connected` to
+`failed`). So Python recovers by **redialling with a resume token**: a brand
+new peer connection, reattached server-side to the session it was already
+running. The transport is new; the conversation is not.
 
-If mid-call network changes matter for your use case, prefer one of the other
-SDKs.
-
-The wire format ships here regardless, tested and ready, for callers driving
-another WebRTC stack:
+Status goes `connected` → `reconnecting` → `connected`:
 
 ```python
-from streamcore import (
-    whip_restart_ice,
-    ice_fragment_from_sdp,
-    apply_ice_fragment,
-)
+import streamcore
 
-result = await whip_restart_ice(session_url, ice_fragment_from_sdp(local_sdp), etag, token)
-answer_sdp = apply_ice_fragment(previous_answer_sdp, result.fragment)
+client = streamcore.Client(
+    streamcore.Config(
+        whip_endpoint="http://localhost:8080/whip",
+        reconnect_attempts=3,
+        reconnect_delay=2.0,
+    ),
+    streamcore.EventHandler(
+        on_reconnect=lambda e: print(f"redial {e.attempt}/{e.max_attempts}: {e.outcome}"),
+    ),
+)
 ```
 
-`whip_offer` returns the session's `etag` for use as `If-Match`.
+One outcome deserves handling rather than logging:
+
+- `RECOVERED` — reattached; history intact.
+- `RECOVERED_WITHOUT_HISTORY` — **the call works but the agent has forgotten
+  everything.** The server had already reaped the session, so the redial
+  started a fresh conversation. Surface this to the user rather than letting
+  them discover it by being asked their name again.
+- `FAILED` — every attempt failed; status becomes `disconnected`.
+
+The window is the server's `session_grace_ms` (30s by default), measured from
+when the connection dropped — not the ~25s ICE deadline the other SDKs work
+against. Keep `reconnect_attempts × reconnect_delay` (doubling each retry)
+inside it. Set `reconnect_attempts=0` to disable and handle drops yourself.
+
+Two caveats specific to this stack:
+
+- **Realtime (speech-to-speech) sessions cannot be resumed.** Their history
+  lives inside the provider, so the server issues no token and a redial starts
+  a new conversation.
+- **A caller-supplied `user_track` is reused across the redial.** The built-in
+  track (the `send_pcm` path) is rebuilt automatically; if you pass your own
+  track to `connect()`, make sure it is still live, or reconnect yourself.
+
+The wire-format helpers for ICE restart still ship in `streamcore.icerestart`
+for callers driving another WebRTC stack:
+
+```python
+from streamcore import whip_restart_ice, ice_fragment_from_sdp, apply_ice_fragment
+```
 
 ## Audio I/O
 
