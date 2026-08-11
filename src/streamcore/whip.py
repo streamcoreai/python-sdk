@@ -5,11 +5,44 @@ from urllib.parse import urlparse, urlunparse
 
 import aiohttp
 
+from .icerestart import ICE_FRAGMENT_CONTENT_TYPE
+
 
 @dataclass
 class WhipResult:
     answer_sdp: str
     session_url: str
+    #: ETag identifying the ICE session (RFC 9725 §4.3.1); required to PATCH it.
+    etag: str = ""
+
+
+@dataclass
+class WhipRestartResult:
+    #: The server's sdpfrag, to fold into the stored remote description.
+    fragment: str
+    #: The rotated tag identifying the new ICE session.
+    etag: str
+
+
+class WhipRestartError(RuntimeError):
+    """Raised when an ICE restart PATCH is rejected."""
+
+    def __init__(self, status: int, body: str, current_etag: str = "") -> None:
+        super().__init__(f"WHIP: ICE restart failed ({status}): {body}")
+        self.status = status
+        self.body = body
+        #: The tag the server reported as current, present on a 412.
+        self.current_etag = current_etag
+
+    @property
+    def retryable(self) -> bool:
+        """Whether another attempt against the same session could still work.
+
+        A 404 means the session was reaped, 409 that it has no peer to restart,
+        and 405 that the server declines restarts entirely — only a redial
+        recovers from those.
+        """
+        return self.status not in (404, 409, 405)
 
 
 async def whip_offer(endpoint: str, offer_sdp: str, token: str = "") -> WhipResult:
@@ -41,7 +74,44 @@ async def whip_offer(endpoint: str, offer_sdp: str, token: str = "") -> WhipResu
                     (parsed.scheme, parsed.netloc, location, "", "", "")
                 )
 
-            return WhipResult(answer_sdp=answer_sdp, session_url=session_url)
+            return WhipResult(
+                answer_sdp=answer_sdp,
+                session_url=session_url,
+                etag=resp.headers.get("ETag", ""),
+            )
+
+
+async def whip_restart_ice(
+    session_url: str,
+    fragment: str,
+    etag: str = "",
+    token: str = "",
+) -> WhipRestartResult:
+    """Send an ICE restart to the session URL per RFC 9725 §4.4.2.
+
+    ``etag`` is sent as ``If-Match`` so a restart racing another one is
+    rejected rather than applied to a generation that no longer exists.
+
+    Note that aiortc cannot produce an ICE restart offer, so this is for
+    callers driving another WebRTC stack — see :mod:`streamcore.icerestart`.
+    """
+    headers: dict[str, str] = {"Content-Type": ICE_FRAGMENT_CONTENT_TYPE}
+    if etag:
+        headers["If-Match"] = etag
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+
+    async with aiohttp.ClientSession() as session:
+        async with session.patch(session_url, data=fragment, headers=headers) as resp:
+            body = await resp.text()
+            if resp.status != 200:
+                raise WhipRestartError(
+                    resp.status, body, resp.headers.get("ETag", "")
+                )
+            return WhipRestartResult(
+                fragment=body,
+                etag=resp.headers.get("ETag", "") or etag,
+            )
 
 
 async def whip_delete(session_url: str, token: str = "") -> None:

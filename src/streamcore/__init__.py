@@ -9,7 +9,13 @@ from .types import (
     EventHandler,
 )
 from .client import Client
-from .whip import whip_offer, whip_delete
+from .icerestart import (
+    ICE_FRAGMENT_CONTENT_TYPE,
+    apply_ice_fragment,
+    ice_fragment_from_sdp,
+    parse_ice_details,
+)
+from .whip import whip_offer, whip_delete, whip_restart_ice, WhipRestartError
 
 __all__ = [
     "Client",
@@ -22,4 +28,10 @@ __all__ = [
     "DataChannelMessage",
     "whip_offer",
     "whip_delete",
+    "whip_restart_ice",
+    "WhipRestartError",
+    "ICE_FRAGMENT_CONTENT_TYPE",
+    "apply_ice_fragment",
+    "ice_fragment_from_sdp",
+    "parse_ice_details",
 ]

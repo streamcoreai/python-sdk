@@ -55,6 +55,10 @@ class Client:
         # servers enforcing Bearer auth on ``/whip`` reject the teardown and
         # skip server-side finalization (billing, transcript persistence, etc.).
         self._last_token: str = ""
+        #: ETag identifying the current ICE session (RFC 9725 §4.3.1). Exposed
+        #: for callers driving an ICE restart themselves — see
+        #: :mod:`streamcore.icerestart` for why the SDK cannot.
+        self._etag: str = ""
         self._blackhole: MediaBlackhole | None = None
 
         self._lock = Lock()
@@ -133,7 +137,12 @@ class Client:
                 state = pc.connectionState
                 if state == "connected":
                     self._set_status(ConnectionStatus.CONNECTED)
-                elif state in ("failed", "closed", "disconnected"):
+                elif state in ("failed", "closed"):
+                    # aiortc has no "disconnected" state — it goes straight
+                    # from connected to failed — so unlike the other SDKs
+                    # there is no transient window to attempt an ICE restart
+                    # in. See streamcore.icerestart for why, and prefer one of
+                    # the other SDKs where mid-call network changes matter.
                     self._set_status(ConnectionStatus.DISCONNECTED)
 
             # Create offer and gather ICE candidates.
@@ -163,6 +172,7 @@ class Client:
             # WHIP exchange.
             result = await whip_offer(self.config.whip_endpoint, offer_sdp, token)
             self._session_url = result.session_url
+            self._etag = result.etag
 
             answer = RTCSessionDescription(sdp=result.answer_sdp, type="answer")
             await pc.setRemoteDescription(answer)

@@ -1,5 +1,7 @@
 # streamcore (Python)
 
+**English** | [简体中文](./README.zh-CN.md)
+
 Python SDK for connecting to a [streamcore](https://github.com/streamcore/streamcore-server) server via WebRTC + WHIP, powered by [aiortc](https://github.com/aiortc/aiortc).
 
 ## Requirements
@@ -65,14 +67,21 @@ Creates a new voice agent client.
 | Field           | Type         | Default                        | Description                 |
 | --------------- | ------------ | ------------------------------ | --------------------------- |
 | `whip_endpoint` | `str`        | `"http://localhost:8080/whip"` | WHIP signaling endpoint URL |
+| `token`         | `str`        | `""`                           | JWT sent as `Authorization: Bearer` on the WHIP request |
+| `token_url`     | `str`        | `""`                           | Token endpoint; when set, a JWT is fetched before each connection (overrides `token`) |
+| `api_key`       | `str`        | `""`                           | Sent as `Authorization: Bearer` when fetching from `token_url` |
 | `ice_servers`   | `list[str]`  | `["stun:stun.l.google.com:19302"]` | ICE server URLs        |
 
 #### `EventHandler`
+
+All callbacks are optional.
 
 | Callback                 | Signature                                                       | Description                           |
 | ------------------------ | --------------------------------------------------------------- | ------------------------------------- |
 | `on_status_change`       | `(status: ConnectionStatus) -> None`                            | Fired when connection status changes  |
 | `on_transcript`          | `(entry: TranscriptEntry, all: list[TranscriptEntry]) -> None`  | Fired on new or updated transcript    |
+| `on_agent_state_change`  | `(state: AgentState) -> None`                                   | Fired when the agent starts listening, thinking, or speaking |
+| `on_timing`              | `(event: TimingEvent) -> None`                                  | Fired with server-side pipeline timing info |
 | `on_error`               | `(error: Exception) -> None`                                    | Fired on connection or server errors  |
 | `on_data_channel_message`| `(msg: DataChannelMessage) -> None`                             | Fired for every raw DC message        |
 
@@ -95,6 +104,40 @@ Creates a new voice agent client.
 | `SAMPLE_RATE` | `48000`  | Audio sample rate in Hz          |
 | `CHANNELS`    | `1`      | Number of channels (mono)        |
 | `FRAME_SIZE`  | `960`    | Samples per 20 ms frame          |
+
+## Reconnection
+
+**The Python SDK does not reconnect automatically.** A network change mid-call
+ends the session, and recovery means calling `connect()` again — which starts a
+new conversation, without the previous history.
+
+This is an aiortc limitation, not a protocol one. The server supports ICE
+restart (`PATCH /whip/{sessionId}`, RFC 9725 §4.4), and the TypeScript, React
+Native, Go, and Rust SDKs use it to recover a dropped connection on the *same*
+session, conversation intact. aiortc cannot: `RTCPeerConnection.createOffer()`
+takes no options, aioice fixes its ICE credentials at construction, and aiortc
+has no `disconnected` connection state to trigger on — it goes straight from
+`connected` to `failed`. Performing a restart would mean rebuilding the ICE
+layer under a live DTLS session.
+
+If mid-call network changes matter for your use case, prefer one of the other
+SDKs.
+
+The wire format ships here regardless, tested and ready, for callers driving
+another WebRTC stack:
+
+```python
+from streamcore import (
+    whip_restart_ice,
+    ice_fragment_from_sdp,
+    apply_ice_fragment,
+)
+
+result = await whip_restart_ice(session_url, ice_fragment_from_sdp(local_sdp), etag, token)
+answer_sdp = apply_ice_fragment(previous_answer_sdp, result.fragment)
+```
+
+`whip_offer` returns the session's `etag` for use as `If-Match`.
 
 ## Audio I/O
 
