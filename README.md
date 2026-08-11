@@ -111,13 +111,17 @@ A network change mid-call is recovered automatically, and the conversation
 survives it: the agent still knows who you are and does not replay its
 greeting.
 
-The mechanism differs from the other SDKs. They keep the transport alive with
-an ICE restart; aiortc cannot do that (`RTCPeerConnection.createOffer()` takes
-no options, aioice fixes its ICE credentials at construction, and aiortc has no
-`disconnected` state to act on — it goes straight from `connected` to
-`failed`). So Python recovers by **redialling with a resume token**: a brand
-new peer connection, reattached server-side to the session it was already
-running. The transport is new; the conversation is not.
+The other SDKs run a two-phase ladder: an ICE restart first (which keeps the
+transport itself alive), falling back to a resume redial once the connection
+has failed. **Python has only the second phase**, and that is a hard aiortc
+limit rather than a choice: `RTCPeerConnection.createOffer()` takes no options,
+aioice fixes its ICE credentials at construction, and aiortc has no
+`disconnected` state to act on — it goes straight from `connected` to `failed`.
+
+So Python recovers by **redialling with a resume token**: a brand new peer
+connection, reattached server-side to the session it was already running. The
+transport is new; the conversation is not. In practice the difference is a
+moment of silence where the other SDKs would have had none.
 
 Status goes `connected` → `reconnecting` → `connected`:
 
