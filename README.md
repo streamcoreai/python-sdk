@@ -70,6 +70,7 @@ Creates a new voice agent client.
 | `token`         | `str`        | `""`                           | JWT sent as `Authorization: Bearer` on the WHIP request |
 | `token_url`     | `str`        | `""`                           | Token endpoint; when set, a JWT is fetched before each connection (overrides `token`) |
 | `api_key`       | `str`        | `""`                           | Sent as `Authorization: Bearer` when fetching from `token_url` |
+| `resource_id`   | `str`        | `""`                           | Who is on the call, forwarded to an external agent so it can scope memory to the person rather than the call. Sent in the token request body when `token_url` is set (the server signs it into the token), otherwise as an `X-StreamCore-Resource-Id` header |
 | `ice_servers`   | `list[str]`  | `["stun:stun.l.google.com:19302"]` | ICE server URLs        |
 
 #### `EventHandler`

@@ -188,14 +188,23 @@ class Client:
             # so localDescription.sdp already contains all candidates.
             offer_sdp = pc.localDescription.sdp
 
-            # Fetch a fresh token from the token endpoint if configured.
+            # Fetch a fresh token from the token endpoint if configured. Any
+            # resource_id goes in the body for the server to sign into the
+            # token; this call carries the API key, the WHIP request does not.
             token = self.config.token
             if self.config.token_url:
                 fetch_headers: dict[str, str] = {}
                 if self.config.api_key:
                     fetch_headers["Authorization"] = f"Bearer {self.config.api_key}"
+                token_body = (
+                    {"resource_id": self.config.resource_id}
+                    if self.config.resource_id
+                    else None
+                )
                 async with aiohttp.ClientSession() as http_session:
-                    async with http_session.post(self.config.token_url, headers=fetch_headers) as resp:
+                    async with http_session.post(
+                        self.config.token_url, headers=fetch_headers, json=token_body
+                    ) as resp:
                         if resp.status != 200:
                             raise RuntimeError(f"Token request failed ({resp.status})")
                         data = await resp.json()
@@ -206,7 +215,11 @@ class Client:
 
             # WHIP exchange.
             result = await whip_offer(
-                self.config.whip_endpoint, offer_sdp, token, resume_token
+                self.config.whip_endpoint,
+                offer_sdp,
+                token,
+                resume_token,
+                self.config.resource_id,
             )
             self._session_url = result.session_url
             self._etag = result.etag

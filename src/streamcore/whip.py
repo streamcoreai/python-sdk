@@ -7,6 +7,10 @@ import aiohttp
 
 from .icerestart import ICE_FRAGMENT_CONTENT_TYPE
 
+#: Carries the caller identity when there is no token endpoint to sign one into
+#: a claim. For server-side clients, not browsers.
+RESOURCE_ID_HEADER = "X-StreamCore-Resource-Id"
+
 
 @dataclass
 class WhipResult:
@@ -56,6 +60,7 @@ async def whip_offer(
     offer_sdp: str,
     token: str = "",
     resume_token: str = "",
+    resource_id: str = "",
 ) -> WhipResult:
     """Perform a WHIP signaling exchange per RFC 9725 §4.2.
 
@@ -66,10 +71,15 @@ async def whip_offer(
     rather than starting a fresh one. Check ``resume_status`` on the result —
     a token the server no longer recognises still yields a working call, but
     one whose agent remembers nothing.
+
+    ``resource_id`` goes in a header, and the server ignores it whenever the
+    token already carries a claim.
     """
     headers: dict[str, str] = {"Content-Type": "application/sdp"}
     if token:
         headers["Authorization"] = f"Bearer {token}"
+    if resource_id:
+        headers[RESOURCE_ID_HEADER] = resource_id
 
     params = {"resume": resume_token} if resume_token else None
 

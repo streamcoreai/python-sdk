@@ -70,6 +70,7 @@ asyncio.run(main())
 | `token`         | `str`        | `""`                           | 在 WHIP 请求中以 `Authorization: Bearer` 发送的 JWT |
 | `token_url`     | `str`        | `""`                           | token 端点；设置后每次连接前都会取一次 JWT（优先于 `token`） |
 | `api_key`       | `str`        | `""`                           | 从 `token_url` 取 token 时以 `Authorization: Bearer` 发送 |
+| `resource_id`   | `str`        | `""`                           | 通话里的是谁，会转发给外部 agent，使其把记忆划到人而非单次通话上。设置了 `token_url` 时随取 token 的请求体发送（由服务端签进 token），否则作为 `X-StreamCore-Resource-Id` 请求头发送 |
 | `ice_servers`   | `list[str]`  | `["stun:stun.l.google.com:19302"]` | ICE 服务器 URL        |
 
 #### `EventHandler`
