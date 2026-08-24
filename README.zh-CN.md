@@ -85,6 +85,7 @@ asyncio.run(main())
 | `on_timing`              | `(event: TimingEvent) -> None`                                  | 携带服务端流水线耗时信息 |
 | `on_error`               | `(error: Exception) -> None`                                    | 连接或服务端错误时触发  |
 | `on_data_channel_message`| `(msg: DataChannelMessage) -> None`                             | 每条原始 DataChannel 消息都会触发        |
+| `on_data`                | `(topic: str, payload: bytes) -> None`                          | 服务端下发的单向数据包，payload 已完成 base64 解码（`movement.command` 承载移动指令） |
 
 #### 方法
 

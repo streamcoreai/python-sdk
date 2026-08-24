@@ -57,13 +57,15 @@ class TimingEvent:
 
 @dataclass
 class DataChannelMessage:
-    type: str  # "transcript", "response", "error", "timing", or "state"
+    type: str  # "transcript", "response", "error", "timing", "state", or "data"
     text: str = ""
     final: bool = False
     message: str = ""  # for error type
     stage: str = ""  # for timing type
     ms: int = 0  # for timing type
     state: str = ""  # for state type
+    topic: str = ""  # for data type
+    payload: str = ""  # for data type; base64-encoded JSON
 
 
 @dataclass
@@ -113,6 +115,12 @@ class EventHandler:
     on_timing: Callable[[TimingEvent], None] | None = None
     on_agent_state_change: Callable[[AgentState], None] | None = None
     on_data_channel_message: Callable[[DataChannelMessage], None] | None = None
+    #: Called for a topic-addressed packet from a device-side tool, with the
+    #: payload already base64-decoded. The server sends these fire-and-forget
+    #: — it has already told the model the action succeeded — so there is
+    #: nothing to reply to. Locomotion commands from the ``movement.*`` tools
+    #: arrive on the ``movement.command`` topic.
+    on_data: Callable[[str, bytes], None] | None = None
     #: Called for each redial attempt and once when the outcome is known.
     #: Watch for RECOVERED_WITHOUT_HISTORY — the call works, but the agent has
     #: forgotten the conversation and your UI may want to say so.

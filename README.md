@@ -85,6 +85,7 @@ All callbacks are optional.
 | `on_timing`              | `(event: TimingEvent) -> None`                                  | Fired with server-side pipeline timing info |
 | `on_error`               | `(error: Exception) -> None`                                    | Fired on connection or server errors  |
 | `on_data_channel_message`| `(msg: DataChannelMessage) -> None`                             | Fired for every raw DC message        |
+| `on_data`                | `(topic: str, payload: bytes) -> None`                          | Fire-and-forget server data packet, payload already base64-decoded (`movement.command` carries locomotion commands) |
 
 #### Methods
 

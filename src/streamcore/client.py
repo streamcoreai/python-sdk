@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import json
 import logging
 from threading import Lock
@@ -497,6 +499,15 @@ class Client:
                         self.events.on_agent_state_change(AgentState(msg.state))
                     except ValueError:
                         logger.warning("Unknown agent state: %s", msg.state)
+                return
+            elif msg.type == "data":
+                if self.events.on_data:
+                    try:
+                        payload = base64.b64decode(msg.payload, validate=True)
+                    except (binascii.Error, ValueError):
+                        logger.warning("Bad base64 on topic %s", msg.topic)
+                        return
+                    self.events.on_data(msg.topic, payload)
                 return
             else:
                 return
